@@ -19,6 +19,7 @@ MAX_PRICE  = 40000
 MAX_MILES  = 35   # K
 MIN_YEAR   = 2022
 ZIP_CODE   = "92101"
+TOP_N      = 5
 # ──────────────────────────────────────────────────────────
 
 
@@ -35,6 +36,24 @@ def send_telegram(text: str):
         return json.loads(r.read())
 
 
+def score_car(car: dict) -> float:
+    """
+    Rating logic (higher = better):
+      - Year:  2023 → +80 pts, 2022 → +40 pts  (freshness matters most)
+      - Miles: each K mile saved → +1.5 pts     (35K → 0, 0K → +52.5)
+      - Price: each $1K saved → +1 pt           ($40K → 0, $25K → +15)
+      - Local store bonus: +15 pts
+    """
+    score = 0.0
+    year = int(car["car"][:4])
+    score += (year - 2021) * 40          # 2022 → 40, 2023 → 80
+    score += max(0, 35 - car["milesNum"]) * 1.5
+    score += max(0, (MAX_PRICE - car["priceNum"]) / 1000)
+    if car["localStore"]:
+        score += 15
+    return round(score, 1)
+
+
 async def scrape_model(page, model_slug: str, model_name: str) -> list:
     url = (
         f"https://www.carmax.com/cars/bmw/{model_slug}"
@@ -45,7 +64,6 @@ async def scrape_model(page, model_slug: str, model_name: str) -> list:
     except Exception:
         await page.goto(url, timeout=30000)
 
-    # Scroll to trigger lazy loading
     for _ in range(6):
         await page.evaluate("window.scrollBy(0, 1500)")
         await asyncio.sleep(0.4)
@@ -101,33 +119,42 @@ async def scrape_model(page, model_slug: str, model_name: str) -> list:
     return results or []
 
 
+MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+
+
 def format_message(cars: list) -> str:
     today = datetime.now().strftime("%-d %B %Y")
-    sep   = "━━━━━━━━━━━━━━━"
+    sep   = "━" * 15
 
     if not cars:
         return (
-            f"🚗 <b>BMW CarMax San Diego</b>\n"
+            f"🚗 <b>BMW CarMax San Diego — TOP {TOP_N}</b>\n"
             f"📅 {today}\n{sep}\n\n"
             f"😔 Сегодня машин под критерии не найдено.\n\n"
             f"{sep}\n"
             f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль"
         )
 
-    lines = [f"🚗 <b>BMW CarMax San Diego</b>", f"📅 {today}", sep, ""]
-    for i, car in enumerate(cars, 1):
+    lines = [f"🚗 <b>BMW CarMax San Diego — TOP {min(len(cars), TOP_N)}</b>",
+             f"📅 {today}", sep, ""]
+
+    for i, car in enumerate(cars[:TOP_N]):
+        medal    = MEDALS[i]
         delivery = "🚚 Бесплатная доставка" if car["freeShip"] else "✅ Местный магазин"
+        score    = car["score"]
         lines += [
-            f"<b>{i}. {car['car']}</b>",
-            f"💰 {car['price']} · 🦋 {car['miles']} миль",
+            f"{medal} <b>{car['car']}</b>  <i>(рейтинг: {score:.0f})</i>",
+            f"💰 {car['price']} · 🛣 {car['miles']} миль",
             f"📍 {car['location']}",
             delivery,
             f'🔗 <a href="{car["url"]}">Смотреть на CarMax</a>',
             "",
         ]
+
     lines += [
         sep,
-        f"Всего: {len(cars)} машин · {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль",
+        f"Всего найдено: {len(cars)} · показаны лучшие {min(len(cars), TOP_N)}",
+        f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль",
     ]
     return "\n".join(lines)
 
@@ -156,15 +183,21 @@ async def main():
 
         await browser.close()
 
-    # Deduplicate by URL, sort by price
+    # Deduplicate by URL
     seen, unique = set(), []
     for car in all_cars:
         if car["url"] not in seen:
             seen.add(car["url"])
             unique.append(car)
-    unique.sort(key=lambda x: x["priceNum"])
+
+    # Score and sort — best first
+    for car in unique:
+        car["score"] = score_car(car)
+    unique.sort(key=lambda x: x["score"], reverse=True)
 
     print(f"\nTotal unique cars: {len(unique)}")
+    for c in unique[:TOP_N]:
+        print(f"  {c['score']:5.1f} | {c['car']} | {c['price']} | {c['miles']} | {c['location']}")
 
     msg = format_message(unique)
     send_telegram(msg)
