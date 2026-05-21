@@ -9,7 +9,6 @@ from playwright.async_api import async_playwright
 TELEGRAM_TOKEN = "8018807531:AAHhr1LXUUcGbvgoQK0EPEULDEeQdmp6PTA"
 CHAT_ID        = "-5081882651"
 
-# (make_slug, model_slug, make_name, model_name)
 MODELS = [
     ("bmw",  "x5", "BMW",  "X5"),
     ("bmw",  "x3", "BMW",  "X3"),
@@ -19,18 +18,19 @@ MODELS = [
 ]
 
 MAX_PRICE  = 40000
-MAX_MILES  = 35   # K
+MAX_MILES  = 35
 MIN_YEAR   = 2022
 ZIP_CODE   = "92101"
 TOP_N      = 5
 
-# ─── FINANCE PARAMS ───────────────────────────────────────
 FINANCE_APR        = 7.5
 FINANCE_TERM       = 72
 LEASE_MONEY_FACTOR = 0.0022
 LEASE_RESIDUAL_PCT = 0.48
 LEASE_TERM         = 36
 # ──────────────────────────────────────────────────────────
+
+TG_LIMIT = 4000   # Telegram max is 4096, оставляем запас
 
 
 def send_telegram(text: str):
@@ -44,6 +44,29 @@ def send_telegram(text: str):
     req = urllib.request.Request(url, data=data)
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read())
+
+
+def send_long_message(text: str):
+    """Split message by car blocks if it exceeds Telegram limit."""
+    if len(text) <= TG_LIMIT:
+        send_telegram(text)
+        return
+
+    # Split into blocks by empty line separator between cars
+    blocks = text.split("\n\n")
+    chunk  = ""
+    part   = 1
+    for block in blocks:
+        candidate = chunk + ("\n\n" if chunk else "") + block
+        if len(candidate) > TG_LIMIT:
+            if chunk:
+                send_telegram(chunk.strip())
+                part += 1
+            chunk = block
+        else:
+            chunk = candidate
+    if chunk:
+        send_telegram(chunk.strip())
 
 
 def calc_finance(price: int, down: int) -> int:
@@ -62,7 +85,7 @@ def calc_lease(price: int) -> int:
 def score_car(car: dict) -> float:
     score = 0.0
     year = int(car["car"][:4])
-    score += (year - 2021) * 40          # 2022→40, 2023→80
+    score += (year - 2021) * 40
     score += max(0, 35 - car["milesNum"]) * 1.5
     score += max(0, (MAX_PRICE - car["priceNum"]) / 1000)
     if car["localStore"]:
@@ -91,21 +114,21 @@ async def scrape_model(page, make_slug: str, model_slug: str,
         const modelName = '{model_name}';
         const results = [];
         const seen = new Set();
-        document.querySelectorAll('a[href*="/car/"]').forEach(a => {{
+        document.querySelectorAll('a[href*="/car/"]').forEach(a => {
             if (seen.has(a.href)) return;
             let el = a;
-            for (let i = 0; i < 8; i++) {{
+            for (let i = 0; i < 8; i++) {
                 el = el?.parentElement;
                 if (!el) break;
                 const t = el.innerText || '';
-                if (t.includes(makeName) && t.includes(modelName) && t.includes('$') && t.length < 700) {{
+                if (t.includes(makeName) && t.includes(modelName) && t.includes('$') && t.length < 700) {
                     const yearM  = t.match(/(202\\d) {make_name}\\s*({model_name}[^\\n]*)/);
                     const priceM = t.match(/\\$([\\d,]+)\\*/);
                     const milesM = t.match(/([\\d]+)K mi/);
                     const storeM = t.match(/CarMax ([^\\n,]+(?:,\\s*[A-Z]{{2}})?)/);
                     const freeShip   = t.includes('Free Shipping');
                     const localStore = /Kearny|El Cajon|Escondido|Oceanside/.test(t);
-                    if (yearM && priceM) {{
+                    if (yearM && priceM) {
                         const milesNum = milesM ? parseInt(milesM[1]) : 999;
                         const priceNum = parseInt(priceM[1].replace(',', ''));
                         if (
@@ -113,8 +136,8 @@ async def scrape_model(page, make_slug: str, model_slug: str,
                             milesNum <= {MAX_MILES} &&
                             priceNum <= {MAX_PRICE} &&
                             (freeShip || localStore)
-                        ) {{
-                            results.push({{
+                        ) {
+                            results.push({
                                 url:        a.href,
                                 car:        yearM[1] + ' {make_name} ' + yearM[2].trim().split('\\n')[0],
                                 price:      '$' + priceM[1],
@@ -124,14 +147,14 @@ async def scrape_model(page, make_slug: str, model_slug: str,
                                 location:   storeM ? storeM[1].trim() : 'unknown',
                                 freeShip,
                                 localStore,
-                            }});
+                            });
                             seen.add(a.href);
-                        }}
-                    }}
+                        }
+                    }
                     break;
-                }}
-            }}
-        }});
+                }
+            }
+        });
         return results;
     }}""")
     return results or []
@@ -208,14 +231,12 @@ async def main():
 
         await browser.close()
 
-    # Deduplicate by URL
     seen, unique = set(), []
     for car in all_cars:
         if car["url"] not in seen:
             seen.add(car["url"])
             unique.append(car)
 
-    # Score and sort — best first
     for car in unique:
         car["score"] = score_car(car)
     unique.sort(key=lambda x: x["score"], reverse=True)
@@ -225,7 +246,8 @@ async def main():
         print(f"  {c['score']:5.1f} | {c['car']} | {c['price']} | {c['miles']}")
 
     msg = format_message(unique)
-    send_telegram(msg)
+    print(f"\nMessage length: {len(msg)} chars")
+    send_long_message(msg)
     print("Report sent to Telegram ✅")
 
 
