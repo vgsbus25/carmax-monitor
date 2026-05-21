@@ -21,12 +21,12 @@ MIN_YEAR   = 2022
 ZIP_CODE   = "92101"
 TOP_N      = 5
 
-# ─── FINANCE PARAMS (credit score ~725) ───────────────────
-FINANCE_APR      = 7.5   # % APR for used car, score 725
-FINANCE_TERM     = 72    # months
-LEASE_MONEY_FACTOR = 0.0022   # ≈ 5.3% APR
-LEASE_RESIDUAL_PCT = 0.48     # 48% residual after 36 months
-LEASE_TERM       = 36    # months
+# ─── FINANCE PARAMS ───────────────────────────────
+FINANCE_APR        = 7.5    # % APR
+FINANCE_TERM       = 72     # months
+LEASE_MONEY_FACTOR = 0.0022 # ≈ 5.3% APR
+LEASE_RESIDUAL_PCT   = 0.48   # 48% residual after 36 months
+LEASE_TERM         = 36     # months
 # ──────────────────────────────────────────────────────────
 
 
@@ -44,41 +44,29 @@ def send_telegram(text: str):
 
 
 def calc_finance(price: int, down: int,
-                 apr: float = FINANCE_APR, term: int = FINANCE_TERM) -> int:
-    """Monthly payment for auto loan."""
+                 apr: float = FIMANXEE_APR, term: int = FINANCE_TERM) -> int:
     principal = price - down
     if principal <= 0:
         return 0
     r = apr / 100 / 12
-    payment = principal * r * (1 + r)**term / ((1 + r)**term - 1)
-    return round(payment)
+    return round(principal * r * (1 + r)**term / ((1 + r)**term - 1))
 
 
 def calc_lease(price: int, down: int = 0,
                residual_pct: float = LEASE_RESIDUAL_PCT,
                mf: float = LEASE_MONEY_FACTOR,
                term: int = LEASE_TERM) -> int:
-    """Approximate monthly lease payment (cap cost reduction = down)."""
     cap_cost = price - down
     residual  = price * residual_pct
     if cap_cost <= residual:
         return 0
-    depreciation   = (cap_cost - residual) / term
-    finance_charge = (cap_cost + residual) * mf
-    return round(depreciation + finance_charge)
+    return round((cap_cost - residual) / term + (cap_cost + residual) * mf)
 
 
 def score_car(car: dict) -> float:
-    """
-    Rating logic (higher = better):
-      - Year:  2023 → +80 pts, 2022 → +40 pts  (freshness matters most)
-      - Miles: each K mile saved → +1.5 pts     (35K → 0, 0K → +52.5)
-      - Price: each $1K saved → +1 pt           ($40K → 0, $25K → +15)
-      - Local store bonus: +15 pts
-    """
     score = 0.0
     year = int(car["car"][:4])
-    score += (year - 2021) * 40
+    score += (year - 2021) * 40          # 2022→40, 2023→ 80
     score += max(0, 35 - car["milesNum"]) * 1.5
     score += max(0, (MAX_PRICE - car["priceNum"]) / 1000)
     if car["localStore"]:
@@ -160,19 +148,28 @@ def format_message(cars: list) -> str:
 
     if not cars:
         return (
-            f"🚗 <b>BMW CarMax San Diego — TOP {TOP_N}</b>\n"
-            f"📅 {today}\n{sep}\n\n"
-            f"😔 Сегодня машин под критерии не найдено.\n\n"
+            f"🚗 <b>BMW CarMax San Diego</b>\n"
+            f"📄 {today}\n{sep}\n\n"
+            f"😔 Сегоднс֧машин под критерии не найдено.\n\n"
             f"{sep}\n"
             f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль"
         )
 
-    lines = [f"🚗 <b>BMW CarMax San Diego — TOP {min(len(cars), TOP_N)}</b>",
-             f"📅 {today}", sep, ""]
+    lines = [
+        f"🚗 <b>BMW CarMax San Diego</b>  <i>(найдено: {len(cars)})</i>",
+        f"📄 {today}",
+        sep,
+        "",
+    ]
 
-    for i, car in enumerate(cars[:TOP_N]):
-        medal    = MEDALS[i]
-        delivery = "🚚 Бесплатная доставка" if car["freeShip"] else "✅ Местный магазин"
+    for i, car in enumerate(cars):
+        # Первые TOP_N — с медалями, остальныe — простой номер
+        if i < TOP_N:
+            prefix = MEDALS[i]
+        else:
+            prefix = f"{i+1}."
+
+        delivery = "🚚Бесплатная доставка" if car["freeShip"] else "✅ Местный магазин"
         score    = car["score"]
         p        = car["priceNum"]
 
@@ -181,23 +178,18 @@ def format_message(cars: list) -> str:
         lease0 = calc_lease(p, down=0)
 
         lines += [
-            f"{medal} <b>{car['car']}</b>  <i>(рейтинг: {score:.0f})</i>",
+            f"{prefix} <b>{car['car']}</b>  <i>(рейтинг: {score:.0f})</i>",
             f"💰 {car['price']} · 🛣 {car['miles']} миль",
             f"📍 {car['location']}",
             delivery,
-            f"📊 <b>Платежи/мес (кредит ~725):</b>",
-            f"  • Финанс $5K↓ → <b>~${fin5}/мес</b>",
-            f"  • Финанс $10K↓ → <b>~${fin10}/мес</b>",
-            f"  • Лизинг $0↓ → <b>~${lease0}/мес</b>",
-            f'🔗 <a href="{car["url"]}">Смотреть на CarMax</a>',
+            f"📊 Finans $5K↓ <b>~${fin5}/мес</b> · $10K↓ <b>~${fin10}/мес</b> · Лизинг <b>~${lease0}/мес</b>",
+            f'✗ <a href="{car["url"]}">Смотреть на CarMax</a>',
             "",
         ]
 
     lines += [
         sep,
-        f"Всего найдено: {len(cars)} · показаны лучшие {min(len(cars), TOP_N)}",
         f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль",
-        f"<i>Расчёт: {FINANCE_APR}% APR / {FINANCE_TERM} мес | Лизинг MF {LEASE_MONEY_FACTOR} / {LEASE_TERM} мес / остаток {int(LEASE_RESIDUAL_PCT*100)}%</i>",
     ]
     return "\n".join(lines)
 
@@ -239,10 +231,8 @@ async def main():
     unique.sort(key=lambda x: x["score"], reverse=True)
 
     print(f"\nTotal unique cars: {len(unique)}")
-    for c in unique[:TOP_N]:
-        p = c['priceNum']
-        print(f"  {c['score']:5.1f} | {c['car']} | {c['price']} | {c['miles']} "
-              f"| fin5=${calc_finance(p,5000)} fin10=${calc_finance(p,10000)} lease=${calc_lease(p)}")
+    for c in unique:
+        print(f"  {c['score']:5.1f} | {c['car']} | {c['price']} | {c['miles']}")
 
     msg = format_message(unique)
     send_telegram(msg)
