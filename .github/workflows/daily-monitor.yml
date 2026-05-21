@@ -2,7 +2,8 @@ name: BMW CarMax Daily Monitor
 
 on:
   schedule:
-    - cron: '0 16 * * *'   # 9:00am PDT (UTC-7) every day
+    - cron: '0 19 * * *'   # 12:00pm PDT (UTC-7)
+    - cron: '0 3 * * *'    # 8:00pm PDT (UTC-7)
   workflow_dispatch:
 
 jobs:
