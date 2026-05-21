@@ -9,10 +9,13 @@ from playwright.async_api import async_playwright
 TELEGRAM_TOKEN = "8018807531:AAHhr1LXUUcGbvgoQK0EPEULDEeQdmp6PTA"
 CHAT_ID        = "-5081882651"
 
+# (make_slug, model_slug, make_name, model_name)
 MODELS = [
-    ("x5", "X5"),
-    ("x3", "X3"),
-    ("x4", "X4"),
+    ("bmw",  "x5", "BMW",  "X5"),
+    ("bmw",  "x3", "BMW",  "X3"),
+    ("bmw",  "x4", "BMW",  "X4"),
+    ("audi", "q5", "Audi", "Q5"),
+    ("audi", "q7", "Audi", "Q7"),
 ]
 
 MAX_PRICE  = 40000
@@ -21,12 +24,12 @@ MIN_YEAR   = 2022
 ZIP_CODE   = "92101"
 TOP_N      = 5
 
-# ─── FINANCE PARAMS ───────────────────────────────
-FINANCE_APR        = 7.5    # % APR
-FINANCE_TERM       = 72     # months
-LEASE_MONEY_FACTOR = 0.0022 # ≈ 5.3% APR
-LEASE_RESIDUAL_PCT   = 0.48   # 48% residual after 36 months
-LEASE_TERM         = 36     # months
+# ─── FINANCE PARAMS ───────────────────────────────────────
+FINANCE_APR        = 7.5
+FINANCE_TERM       = 72
+LEASE_MONEY_FACTOR = 0.0022
+LEASE_RESIDUAL_PCT = 0.48
+LEASE_TERM         = 36
 # ──────────────────────────────────────────────────────────
 
 
@@ -43,30 +46,23 @@ def send_telegram(text: str):
         return json.loads(r.read())
 
 
-def calc_finance(price: int, down: int,
-                 apr: float = FIMANXEE_APR, term: int = FINANCE_TERM) -> int:
+def calc_finance(price: int, down: int) -> int:
     principal = price - down
     if principal <= 0:
         return 0
-    r = apr / 100 / 12
-    return round(principal * r * (1 + r)**term / ((1 + r)**term - 1))
+    r = FINANCE_APR / 100 / 12
+    return round(principal * r * (1 + r)**FINANCE_TERM / ((1 + r)**FINANCE_TERM - 1))
 
 
-def calc_lease(price: int, down: int = 0,
-               residual_pct: float = LEASE_RESIDUAL_PCT,
-               mf: float = LEASE_MONEY_FACTOR,
-               term: int = LEASE_TERM) -> int:
-    cap_cost = price - down
-    residual  = price * residual_pct
-    if cap_cost <= residual:
-        return 0
-    return round((cap_cost - residual) / term + (cap_cost + residual) * mf)
+def calc_lease(price: int) -> int:
+    residual = price * LEASE_RESIDUAL_PCT
+    return round((price - residual) / LEASE_TERM + (price + residual) * LEASE_MONEY_FACTOR)
 
 
 def score_car(car: dict) -> float:
     score = 0.0
     year = int(car["car"][:4])
-    score += (year - 2021) * 40          # 2022→40, 2023→ 80
+    score += (year - 2021) * 40          # 2022→40, 2023→80
     score += max(0, 35 - car["milesNum"]) * 1.5
     score += max(0, (MAX_PRICE - car["priceNum"]) / 1000)
     if car["localStore"]:
@@ -74,9 +70,10 @@ def score_car(car: dict) -> float:
     return round(score, 1)
 
 
-async def scrape_model(page, model_slug: str, model_name: str) -> list:
+async def scrape_model(page, make_slug: str, model_slug: str,
+                       make_name: str, model_name: str) -> list:
     url = (
-        f"https://www.carmax.com/cars/bmw/{model_slug}"
+        f"https://www.carmax.com/cars/{make_slug}/{model_slug}"
         f"?zip={ZIP_CODE}&price={MAX_PRICE}&year={MIN_YEAR}-2023&sortby=price-asc"
     )
     try:
@@ -90,7 +87,8 @@ async def scrape_model(page, model_slug: str, model_name: str) -> list:
     await asyncio.sleep(2)
 
     results = await page.evaluate(f"""() => {{
-        const model = '{model_name}';
+        const makeName  = '{make_name}';
+        const modelName = '{model_name}';
         const results = [];
         const seen = new Set();
         document.querySelectorAll('a[href*="/car/"]').forEach(a => {{
@@ -100,8 +98,8 @@ async def scrape_model(page, model_slug: str, model_name: str) -> list:
                 el = el?.parentElement;
                 if (!el) break;
                 const t = el.innerText || '';
-                if (t.includes('BMW') && t.includes(model) && t.includes('$') && t.length < 700) {{
-                    const yearM  = t.match(/(202\\d) BMW\\s*(X[345][^\\n]*)/);
+                if (t.includes(makeName) && t.includes(modelName) && t.includes('$') && t.length < 700) {{
+                    const yearM  = t.match(/(202\\d) {make_name}\\s*({model_name}[^\\n]*)/);
                     const priceM = t.match(/\\$([\\d,]+)\\*/);
                     const milesM = t.match(/([\\d]+)K mi/);
                     const storeM = t.match(/CarMax ([^\\n,]+(?:,\\s*[A-Z]{{2}})?)/);
@@ -117,13 +115,13 @@ async def scrape_model(page, model_slug: str, model_name: str) -> list:
                             (freeShip || localStore)
                         ) {{
                             results.push({{
-                                url:       a.href,
-                                car:       yearM[1] + ' BMW ' + yearM[2].trim().split('\\n')[0],
-                                price:     '$' + priceM[1],
+                                url:        a.href,
+                                car:        yearM[1] + ' {make_name} ' + yearM[2].trim().split('\\n')[0],
+                                price:      '$' + priceM[1],
                                 priceNum,
-                                miles:     milesM ? milesM[1] + 'K' : '?',
+                                miles:      milesM ? milesM[1] + 'K' : '?',
                                 milesNum,
-                                location:  storeM ? storeM[1].trim() : 'unknown',
+                                location:   storeM ? storeM[1].trim() : 'unknown',
                                 freeShip,
                                 localStore,
                             }});
@@ -148,42 +146,34 @@ def format_message(cars: list) -> str:
 
     if not cars:
         return (
-            f"🚗 <b>BMW CarMax San Diego</b>\n"
-            f"📄 {today}\n{sep}\n\n"
-            f"😔 Сегоднс֧машин под критерии не найдено.\n\n"
+            f"🚗 <b>BMW + Audi CarMax San Diego</b>\n"
+            f"📅 {today}\n{sep}\n\n"
+            f"😔 Сегодня машин под критерии не найдено.\n\n"
             f"{sep}\n"
             f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль"
         )
 
     lines = [
-        f"🚗 <b>BMW CarMax San Diego</b>  <i>(найдено: {len(cars)})</i>",
-        f"📄 {today}",
+        f"🚗 <b>BMW + Audi CarMax San Diego</b>  <i>(найдено: {len(cars)})</i>",
+        f"📅 {today}",
         sep,
         "",
     ]
 
     for i, car in enumerate(cars):
-        # Первые TOP_N — с медалями, остальныe — простой номер
-        if i < TOP_N:
-            prefix = MEDALS[i]
-        else:
-            prefix = f"{i+1}."
-
-        delivery = "🚚Бесплатная доставка" if car["freeShip"] else "✅ Местный магазин"
-        score    = car["score"]
+        prefix   = MEDALS[i] if i < TOP_N else f"{i+1}."
+        delivery = "🚚 Бесплатная доставка" if car["freeShip"] else "✅ Местный магазин"
         p        = car["priceNum"]
 
-        fin5   = calc_finance(p, 5000)
-        fin10  = calc_finance(p, 10000)
-        lease0 = calc_lease(p, down=0)
-
         lines += [
-            f"{prefix} <b>{car['car']}</b>  <i>(рейтинг: {score:.0f})</i>",
+            f"{prefix} <b>{car['car']}</b>  <i>(рейтинг: {car['score']:.0f})</i>",
             f"💰 {car['price']} · 🛣 {car['miles']} миль",
             f"📍 {car['location']}",
             delivery,
-            f"📊 Finans $5K↓ <b>~${fin5}/мес</b> · $10K↓ <b>~${fin10}/мес</b> · Лизинг <b>~${lease0}/мес</b>",
-            f'✗ <a href="{car["url"]}">Смотреть на CarMax</a>',
+            f"📊 Финанс $5K↓ <b>~${calc_finance(p,5000)}/мес</b> · "
+            f"$10K↓ <b>~${calc_finance(p,10000)}/мес</b> · "
+            f"Лизинг <b>~${calc_lease(p)}/мес</b>",
+            f'🔗 <a href="{car["url"]}">Смотреть на CarMax</a>',
             "",
         ]
 
@@ -207,10 +197,10 @@ async def main():
         page = await context.new_page()
 
         all_cars = []
-        for slug, name in MODELS:
-            print(f"Scraping BMW {name}...")
+        for make_slug, model_slug, make_name, model_name in MODELS:
+            print(f"Scraping {make_name} {model_name}...")
             try:
-                results = await scrape_model(page, slug, name)
+                results = await scrape_model(page, make_slug, model_slug, make_name, model_name)
                 print(f"  Found {len(results)} matching cars")
                 all_cars.extend(results)
             except Exception as e:
