@@ -1,0 +1,29 @@
+name: BMW CarMax Daily Monitor
+
+on:
+  schedule:
+    - cron: '0 16 * * *'   # 9:00am PDT (UTC-7) every day
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: Run CarMax monitor
+        run: python carmax_monitor.py
