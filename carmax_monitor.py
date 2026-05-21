@@ -2,7 +2,7 @@ import asyncio
 import json
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from playwright.async_api import async_playwright
 
 # ─── CONFIG ───────────────────────────────────────────────
@@ -160,13 +160,42 @@ async def scrape_model(page, make_slug: str, model_slug: str,
 
 MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949", "4️⃣", "5️⃣"]
 
+PDT = timezone(timedelta(hours=-7))
+
+
+def get_greeting() -> str:
+    hour = datetime.now(PDT).hour
+    if 5 <= hour < 12:
+        return (
+            "\U0001f305 Доброе утро, Виталий и Светлана!\n"
+            "Пусть это утро принесёт вам отличные находки! \U0001f340"
+        )
+    elif 12 <= hour < 18:
+        return (
+            "☀️ Добрый день, Виталий и Светлана!\n"
+            "Желаем хорошего настроения и удачных покупок! \U0001f600"
+        )
+    elif 18 <= hour < 23:
+        return (
+            "\U0001f306 Добрый вечер, Виталий и Светлана!\n"
+            "Надеемся, вечерний обзор вас порадует! \U0001f31f"
+        )
+    else:
+        return (
+            "\U0001f319 Доброй ночи, Виталий и Светлана!\n"
+            "Пусть завтра найдётся идеальное авто! ✨"
+        )
+
 
 def format_message(cars: list) -> str:
     today = datetime.now().strftime("%-d %B %Y")
     sep   = "━" * 15
 
+    greeting = get_greeting()
+
     if not cars:
         return (
+            f"{greeting}\n\n"
             f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>\n"
             f"\U0001f4c5 {today}\n{sep}\n\n"
             f"\U0001f614 Сегодня машин под критерии не найдено.\n\n"
@@ -175,6 +204,8 @@ def format_message(cars: list) -> str:
         )
 
     lines = [
+        greeting,
+        "",
         f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>  <i>(найдено: {len(cars)})</i>",
         f"\U0001f4c5 {today}",
         sep,
