@@ -55,13 +55,11 @@ def send_long_message(text: str):
     # Split into blocks by empty line separator between cars
     blocks = text.split("\n\n")
     chunk  = ""
-    part   = 1
     for block in blocks:
         candidate = chunk + ("\n\n" if chunk else "") + block
         if len(candidate) > TG_LIMIT:
             if chunk:
                 send_telegram(chunk.strip())
-                part += 1
             chunk = block
         else:
             chunk = candidate
@@ -114,21 +112,21 @@ async def scrape_model(page, make_slug: str, model_slug: str,
         const modelName = '{model_name}';
         const results = [];
         const seen = new Set();
-        document.querySelectorAll('a[href*="/car/"]').forEach(a => {
+        document.querySelectorAll('a[href*="/car/"]').forEach(a => {{
             if (seen.has(a.href)) return;
             let el = a;
-            for (let i = 0; i < 8; i++) {
+            for (let i = 0; i < 8; i++) {{
                 el = el?.parentElement;
                 if (!el) break;
                 const t = el.innerText || '';
-                if (t.includes(makeName) && t.includes(modelName) && t.includes('$') && t.length < 700) {
+                if (t.includes(makeName) && t.includes(modelName) && t.includes('$') && t.length < 700) {{
                     const yearM  = t.match(/(202\\d) {make_name}\\s*({model_name}[^\\n]*)/);
                     const priceM = t.match(/\\$([\\d,]+)\\*/);
                     const milesM = t.match(/([\\d]+)K mi/);
                     const storeM = t.match(/CarMax ([^\\n,]+(?:,\\s*[A-Z]{{2}})?)/);
                     const freeShip   = t.includes('Free Shipping');
                     const localStore = /Kearny|El Cajon|Escondido|Oceanside/.test(t);
-                    if (yearM && priceM) {
+                    if (yearM && priceM) {{
                         const milesNum = milesM ? parseInt(milesM[1]) : 999;
                         const priceNum = parseInt(priceM[1].replace(',', ''));
                         if (
@@ -136,8 +134,8 @@ async def scrape_model(page, make_slug: str, model_slug: str,
                             milesNum <= {MAX_MILES} &&
                             priceNum <= {MAX_PRICE} &&
                             (freeShip || localStore)
-                        ) {
-                            results.push({
+                        ) {{
+                            results.push({{
                                 url:        a.href,
                                 car:        yearM[1] + ' {make_name} ' + yearM[2].trim().split('\\n')[0],
                                 price:      '$' + priceM[1],
@@ -147,20 +145,20 @@ async def scrape_model(page, make_slug: str, model_slug: str,
                                 location:   storeM ? storeM[1].trim() : 'unknown',
                                 freeShip,
                                 localStore,
-                            });
+                            }});
                             seen.add(a.href);
-                        }
-                    }
+                        }}
+                    }}
                     break;
-                }
-            }
-        });
+                }}
+            }}
+        }});
         return results;
     }}""")
     return results or []
 
 
-MEDALS = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949", "4️⃣", "5️⃣"]
 
 
 def format_message(cars: list) -> str:
@@ -169,34 +167,40 @@ def format_message(cars: list) -> str:
 
     if not cars:
         return (
-            f"🚗 <b>BMW + Audi CarMax San Diego</b>\n"
-            f"📅 {today}\n{sep}\n\n"
-            f"😔 Сегодня машин под критерии не найдено.\n\n"
+            f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>\n"
+            f"\U0001f4c5 {today}\n{sep}\n\n"
+            f"\U0001f614 Сегодня машин под критерии не найдено.\n\n"
             f"{sep}\n"
             f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль"
         )
 
     lines = [
-        f"🚗 <b>BMW + Audi CarMax San Diego</b>  <i>(найдено: {len(cars)})</i>",
-        f"📅 {today}",
+        f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>  <i>(найдено: {len(cars)})</i>",
+        f"\U0001f4c5 {today}",
         sep,
         "",
     ]
 
     for i, car in enumerate(cars):
         prefix   = MEDALS[i] if i < TOP_N else f"{i+1}."
-        delivery = "🚚 Бесплатная доставка" if car["freeShip"] else "✅ Местный магазин"
-        p        = car["priceNum"]
+        delivery = (
+            "\U0001f69a Бесплатная доставка"
+            if car["freeShip"] else
+            "✅ Местный магазин"
+        )
+        p = car["priceNum"]
 
         lines += [
             f"{prefix} <b>{car['car']}</b>  <i>(рейтинг: {car['score']:.0f})</i>",
-            f"💰 {car['price']} · 🛣 {car['miles']} миль",
-            f"📍 {car['location']}",
+            f"\U0001f4b0 {car['price']} · \U0001f6e3 {car['miles']} миль",
+            f"\U0001f4cd {car['location']}",
             delivery,
-            f"📊 Финанс $5K↓ <b>~${calc_finance(p,5000)}/мес</b> · "
-            f"$10K↓ <b>~${calc_finance(p,10000)}/мес</b> · "
-            f"Лизинг <b>~${calc_lease(p)}/мес</b>",
-            f'🔗 <a href="{car["url"]}">Смотреть на CarMax</a>',
+            (
+                f"\U0001f4ca Финанс $5K↓ <b>~${calc_finance(p, 5000)}/мес</b> · "
+                f"$10K↓ <b>~${calc_finance(p, 10000)}/мес</b> · "
+                f"Лизинг <b>~${calc_lease(p)}/мес</b>"
+            ),
+            f'\U0001f517 <a href="{car["url"]}">Смотреть на CarMax</a>',
             "",
         ]
 
