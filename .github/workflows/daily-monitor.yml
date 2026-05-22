@@ -2,23 +2,21 @@ name: BMW CarMax Daily Monitor
 
 on:
   schedule:
-    - cron: '0 19 * * *'   # 12:00pm PDT (UTC-7)
-    - cron: '0 3 * * *'    # 8:00pm PDT (UTC-7)
+    - cron: '0 19 * * *'   # 12:00pm PDT
+    - cron: '0 3 * * *'    # 8:00pm PDT
   workflow_dispatch:
+
+permissions:
+  contents: write   # needed to commit seen_cars.json
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
 
       - name: Install dependencies
         run: |
@@ -27,4 +25,6 @@ jobs:
           playwright install-deps chromium
 
       - name: Run CarMax monitor
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python carmax_monitor.py
