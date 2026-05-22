@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import json
+import os
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
@@ -9,6 +11,11 @@ from playwright.async_api import async_playwright
 TELEGRAM_TOKEN = "8018807531:AAHhr1LXUUcGbvgoQK0EPEULDEeQdmp6PTA"
 CHAT_ID        = "-5081882651"
 
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_OWNER = "vgsbus25"
+GITHUB_REPO  = "carmax-monitor"
+SEEN_FILE    = "seen_cars.json"
+
 MODELS = [
     ("bmw",  "x5", "BMW",  "X5"),
     ("bmw",  "x3", "BMW",  "X3"),
@@ -17,11 +24,12 @@ MODELS = [
     ("audi", "q7", "Audi", "Q7"),
 ]
 
-MAX_PRICE  = 40000
-MAX_MILES  = 35
-MIN_YEAR   = 2022
-ZIP_CODE   = "92101"
-TOP_N      = 5
+MAX_PRICE   = 40000
+MAX_MILES   = 35
+MIN_YEAR    = 2022
+ZIP_CODE    = "92101"
+TOP_N       = 5
+RESEND_DAYS = 7   # повторно показывать лот через N дней
 
 FINANCE_APR        = 7.5
 FINANCE_TERM       = 72
@@ -30,16 +38,96 @@ LEASE_RESIDUAL_PCT = 0.48
 LEASE_TERM         = 36
 # ──────────────────────────────────────────────────────────
 
-TG_LIMIT = 4000   # Telegram max is 4096, оставляем запас
+TG_LIMIT = 4000
+PDT      = timezone(timedelta(hours=-7))
+MEDALS   = ["\U0001f947", "\U0001f948", "\U0001f949", "4️⃣", "5️⃣"]
 
+
+# ─── SEEN-CARS STATE (GitHub repo file) ───────────────────
+
+def _gh_headers() -> dict:
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+    }
+
+
+def fetch_seen_cars() -> tuple[dict, str | None]:
+    """Return (seen_dict, file_sha).  seen_dict = {url: iso_timestamp}."""
+    if not GITHUB_TOKEN:
+        print("  [seen] No GITHUB_TOKEN — skipping state load")
+        return {}, None
+    api_url = (
+        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+        f"/contents/{SEEN_FILE}"
+    )
+    req = urllib.request.Request(api_url, headers=_gh_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        content = base64.b64decode(data["content"]).decode("utf-8")
+        return json.loads(content), data["sha"]
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print("  [seen] seen_cars.json not found — starting fresh")
+            return {}, None
+        raise
+
+
+def save_seen_cars(seen: dict, sha: str | None) -> None:
+    """Commit updated seen_cars.json back to the repo."""
+    if not GITHUB_TOKEN:
+        print("  [seen] No GITHUB_TOKEN — skipping state save")
+        return
+    # Remove entries older than 30 days to keep file small
+    cutoff_clean = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    seen = {k: v for k, v in seen.items() if v >= cutoff_clean}
+
+    content  = json.dumps(seen, indent=2, sort_keys=True)
+    encoded  = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    api_url  = (
+        f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+        f"/contents/{SEEN_FILE}"
+    )
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    payload: dict = {
+        "message": f"chore: update seen_cars [{ts}]",
+        "content": encoded,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    data = json.dumps(payload).encode("utf-8")
+    req  = urllib.request.Request(api_url, data=data,
+                                  headers=_gh_headers(), method="PUT")
+    with urllib.request.urlopen(req, timeout=15) as r:
+        resp = json.loads(r.read())
+    print(f"  [seen] Saved {len(seen)} entries → "
+          f"commit {resp['commit']['sha'][:8]}")
+
+
+def filter_eligible(cars: list, seen: dict) -> list:
+    """Keep only cars that are new or were last reported >= RESEND_DAYS ago."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=RESEND_DAYS)).isoformat()
+    result = []
+    for car in cars:
+        last = seen.get(car["url"])
+        if last is None or last <= cutoff:
+            car["is_new"] = (last is None)
+            result.append(car)
+    return result
+
+
+# ─── TELEGRAM ─────────────────────────────────────────────
 
 def send_telegram(text: str):
     url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = urllib.parse.urlencode({
         "chat_id": CHAT_ID,
-        "text": text,
+        "text":    text,
         "parse_mode": "HTML",
-        "disable_web_page_previet": "true",
+        "disable_web_page_preview": "true",
     }).encode()
     req = urllib.request.Request(url, data=data)
     with urllib.request.urlopen(req, timeout=15) as r:
@@ -47,12 +135,10 @@ def send_telegram(text: str):
 
 
 def send_long_message(text: str):
-    """Split message by car blocks if it exceeds Telegram limit."""
+    """Split by car blocks if message exceeds Telegram limit."""
     if len(text) <= TG_LIMIT:
         send_telegram(text)
         return
-
-    # Split into blocks by empty line separator between cars
     blocks = text.split("\n\n")
     chunk  = ""
     for block in blocks:
@@ -67,9 +153,11 @@ def send_long_message(text: str):
         send_telegram(chunk.strip())
 
 
+# ─── FINANCE ──────────────────────────────────────────────
+
 def calc_finance(price: int, down: int) -> int:
     principal = price - down
-    if principal <= 0:
+    if principal <=�
         return 0
     r = FINANCE_APR / 100 / 12
     return round(principal * r * (1 + r)**FINANCE_TERM / ((1 + r)**FINANCE_TERM - 1))
@@ -80,9 +168,11 @@ def calc_lease(price: int) -> int:
     return round((price - residual) / LEASE_TERM + (price + residual) * LEASE_MONEY_FACTOR)
 
 
+# ─── SCORING ──────────────────────────────────────────────
+
 def score_car(car: dict) -> float:
     score = 0.0
-    year = int(car["car"][:4])
+    year  = int(car["car"][:4])
     score += (year - 2021) * 40
     score += max(0, 35 - car["milesNum"]) * 1.5
     score += max(0, (MAX_PRICE - car["priceNum"]) / 1000)
@@ -90,6 +180,8 @@ def score_car(car: dict) -> float:
         score += 15
     return round(score, 1)
 
+
+# ─── SCRAPING ─────────────────────────────────────────────
 
 async def scrape_model(page, make_slug: str, model_slug: str,
                        make_name: str, model_name: str) -> list:
@@ -158,10 +250,7 @@ async def scrape_model(page, make_slug: str, model_slug: str,
     return results or []
 
 
-MEDALS = ["\U0001f947", "\U0001f948", "\U0001f949", "4️⃣", "5️⃣"]
-
-PDT = timezone(timedelta(hours=-7))
-
+# ─── MESSAGE FORMATTING ───────────────────────────────────
 
 def get_greeting() -> str:
     hour = datetime.now(PDT).hour
@@ -187,29 +276,33 @@ def get_greeting() -> str:
         )
 
 
-def format_message(cars: list) -> str:
-    today = datetime.now().strftime("%-d %B %Y")
-    sep   = "━" * 15
-
+def format_message(eligible: list, total_scraped: int) -> str:
+    today    = datetime.now().strftime("%-d %B %Y")
+    sep      = "━" * 15
     greeting = get_greeting()
 
-    if not cars:
+    if not eligible:
         return (
             f"{greeting}\n\n"
             f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>\n"
             f"\U0001f4c5 {today}\n{sep}\n\n"
-            f"\U0001f614 Сегодня машин под критерии не найдено.\n\n"
+            f"\U0001f614 Новых машин под критерии не найдено.\n"
+            f"(всего найдено: {total_scraped})\n\n"
             f"{sep}\n"
-            f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль"
+            f"Фильтры: "
+            f"{MIN_YEAR}-2023 · до ${MAX_PRICE:,} "
+            f"· до {MAX_MILES}K миль"
         )
 
-    total = len(cars)
-    top   = cars[:TOP_N]
+    top = eligible[:TOP_N]
 
     lines = [
         greeting,
         "",
-        f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>  <i>(найдено: {total}, показываю ТОП-{TOP_N})</i>",
+        (
+            f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>  "
+            f"<i>(новых: {len(eligible)}, показываю ТОП-{min(TOP_N, len(eligible))})</i>"
+        ),
         f"\U0001f4c5 {today}",
         sep,
         "",
@@ -222,10 +315,11 @@ def format_message(cars: list) -> str:
             if car["freeShip"] else
             "✅ Местный магазин"
         )
+        new_badge = " \U0001f195" if car.get("is_new") else " \U0001f504"
         p = car["priceNum"]
 
         lines += [
-            f"{prefix} <b>{car['car']}</b>  <i>(рейтинг: {car['score']:.0f})</i>",
+            f"{prefix} <b>{car['car']}</b>{new_badge}  <i>(рейтинг: {car['score']:.0f})</i>",
             f"\U0001f4b0 {car['price']} · \U0001f6e3 {car['miles']} миль",
             f"\U0001f4cd {car['location']}",
             delivery,
@@ -245,7 +339,10 @@ def format_message(cars: list) -> str:
     return "\n".join(lines)
 
 
+# ─── MAIN ─────────────────────────────────────────────────
+
 async def main():
+    # 1. Scrape
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -261,7 +358,9 @@ async def main():
         for make_slug, model_slug, make_name, model_name in MODELS:
             print(f"Scraping {make_name} {model_name}...")
             try:
-                results = await scrape_model(page, make_slug, model_slug, make_name, model_name)
+                results = await scrape_model(
+                    page, make_slug, model_slug, make_name, model_name
+                )
                 print(f"  Found {len(results)} matching cars")
                 all_cars.extend(results)
             except Exception as e:
@@ -269,24 +368,49 @@ async def main():
 
         await browser.close()
 
-    seen, unique = set(), []
+    # 2. Deduplicate
+    seen_urls, unique = set(), []
     for car in all_cars:
-        if car["url"] not in seen:
-            seen.add(car["url"])
+        if car["url"] not in seen_urls:
+            seen_urls.add(car["url"])
             unique.append(car)
 
+    # 3. Score
     for car in unique:
         car["score"] = score_car(car)
     unique.sort(key=lambda x: x["score"], reverse=True)
 
-    print(f"\nTotal unique cars: {len(unique)}")
+    total_scraped = len(unique)
+    print(f"\nTotal unique cars scraped: {total_scraped}")
     for c in unique:
         print(f"  {c['score']:5.1f} | {c['car']} | {c['price']} | {c['miles']}")
 
-    msg = format_message(unique)
+    # 4. Load seen state
+    print("\nLoading seen_cars state...")
+    seen_data, seen_sha = fetch_seen_cars()
+    print(f"  Loaded {len(seen_data)} previously seen cars")
+
+    # 5. Filter: keep new or unseen for 7+ days
+    eligible = filter_eligible(unique, seen_data)
+    print(f"\nEligible (new or 7d+): {len(eligible)}")
+    for c in eligible:
+        label = "NEW" if c.get("is_new") else "RESEND"
+        print(f"  [{label}] {c['score']:5.1f} | {c['car']} | {c['price']}")
+
+    # 6. Format & send
+    msg = format_message(eligible, total_scraped)
     print(f"\nMessage length: {len(msg)} chars")
     send_long_message(msg)
     print("Report sent to Telegram ✅")
+
+    # 7. Update seen state for cars shown in this report
+    now_ts = datetime.now(timezone.utc).isoformat()
+    for car in eligible[:TOP_N]:
+        seen_data[car["url"]] = now_ts
+
+    # 8. Save updated state
+    print("\nSaving seen_cars state...")
+    save_seen_cars(seen_data, seen_sha)
 
 
 if __name__ == "__main__":
