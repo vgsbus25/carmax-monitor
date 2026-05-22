@@ -39,7 +39,7 @@ def send_telegram(text: str):
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "HTML",
-        "disable_web_page_preview": "true",
+        "disable_web_page_previet": "true",
     }).encode()
     req = urllib.request.Request(url, data=data)
     with urllib.request.urlopen(req, timeout=15) as r:
@@ -203,17 +203,20 @@ def format_message(cars: list) -> str:
             f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль"
         )
 
+    total = len(cars)
+    top   = cars[:TOP_N]
+
     lines = [
         greeting,
         "",
-        f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>  <i>(найдено: {len(cars)})</i>",
+        f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>  <i>(найдено: {total}, показываю ТОП-{TOP_N})</i>",
         f"\U0001f4c5 {today}",
         sep,
         "",
     ]
 
-    for i, car in enumerate(cars):
-        prefix   = MEDALS[i] if i < TOP_N else f"{i+1}."
+    for i, car in enumerate(top):
+        prefix   = MEDALS[i]
         delivery = (
             "\U0001f69a Бесплатная доставка"
             if car["freeShip"] else
