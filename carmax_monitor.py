@@ -80,8 +80,8 @@ def save_seen_cars(seen: dict, sha: str | None) -> None:
     if not GITHUB_TOKEN:
         print("  [seen] No GITHUB_TOKEN — skipping state save")
         return
-    # Remove entries older than 30 days to keep file small
-    cutoff_clean = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    # Remove entries older than 90 days (CarMax listings rarely last longer)
+    cutoff_clean = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
     seen = {k: v for k, v in seen.items() if v >= cutoff_clean}
 
     content  = json.dumps(seen, indent=2, sort_keys=True)
@@ -256,7 +256,7 @@ def get_greeting() -> str:
     hour = datetime.now(PDT).hour
     if 5 <= hour < 12:
         return (
-            "\U0001f305 Ќоброе утро, Виталий и Светлана!\n"
+            "\U0001f305 Доброе утро, Виталий и Светлана!\n"
             "Пусть это утро принесёт вам отличные находки! \U0001f340"
         )
     elif 12 <= hour < 18:
@@ -271,23 +271,30 @@ def get_greeting() -> str:
         )
     else:
         return (
-            "\U0001f319 Ќоброй ночи, Виталий и Светлана!\n"
-            "Пусть завтра найдётся идеальное авто!  "
+            "\U0001f319 Доброй ночи, Виталий и Светлана!\n"
+            "Пусть завтра найдётся идеальное авто! ✨"
         )
 
 
-def format_message(eligible: list, total_scraped: int) -> str:
+def format_message(eligible: list, total_scraped: int, already_seen: int) -> str:
     today    = datetime.now().strftime("%-d %B %Y")
     sep      = "━" * 15
     greeting = get_greeting()
 
     if not eligible:
+        if already_seen:
+            seen_note = (
+                f"Все {already_seen} найденных вы уже видели за последние {RESEND_DAYS} дней.\n"
+                f"Покажем снова, как пройдёт неделя. 🕐"
+            )
+        else:
+            seen_note = "Ничего не нашлось по фильтрам."
         return (
             f"{greeting}\n\n"
             f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>\n"
             f"\U0001f4c5 {today}\n{sep}\n\n"
-            f"\U0001f614 Новых машин под критерии не найдено.\n"
-            f"(всего найдено: {total_scraped})\n\n"
+            f"\U0001f634 Новых машин нет.\n"
+            f"{seen_note}\n\n"
             f"{sep}\n"
             f"Фильтры: "
             f"{MIN_YEAR}-2023 · до ${MAX_PRICE:,} "
@@ -296,12 +303,24 @@ def format_message(eligible: list, total_scraped: int) -> str:
 
     top = eligible[:TOP_N]
 
+    new_count    = sum(1 for c in eligible if c.get("is_new"))
+    resend_count = len(eligible) - new_count
+    parts = []
+    if new_count:
+        parts.append(f"\U0001f195 новых: {new_count}")
+    if resend_count:
+        parts.append(f"\U0001f504 повтор 7д+: {resend_count}")
+    if already_seen:
+        parts.append(f"\U0001f515 пропущено: {already_seen}")
+    summary = ", ".join(parts)
+
     lines = [
         greeting,
         "",
         (
             f"\U0001f697 <b>BMW + Audi CarMax San Diego</b>  "
-            f"<i>(новых: {len(eligible)}, показываю ТОП-{min(TOP_N, len(eligible))})</i>"
+            f"<i>({summary}, "
+            f"показываю ТОП-{min(TOP_N, len(eligible))})</i>"
         ),
         f"\U0001f4c5 {today}",
         sep,
@@ -334,7 +353,7 @@ def format_message(eligible: list, total_scraped: int) -> str:
 
     lines += [
         sep,
-        f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K милы",
+        f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль",
     ]
     return "\n".join(lines)
 
@@ -390,15 +409,15 @@ async def main():
     seen_data, seen_sha = fetch_seen_cars()
     print(f"  Loaded {len(seen_data)} previously seen cars")
 
-    # 5. Filter: keep new or unseen for 7+ days
+    # 5. Filter: keep only cars never reported before
     eligible = filter_eligible(unique, seen_data)
-    print(f"\nEligible (new or 7d+): {len(eligible)}")
+    already_seen = total_scraped - len(eligible)
+    print(f"\nNew (never seen): {len(eligible)} / {total_scraped} (already seen: {already_seen})")
     for c in eligible:
-        label = "NEW" if c.get("is_new") else "RESEND"
-        print(f"  [{label}] {c['score']:5.1f} | {c['car']} | {c['price']}")
+        print(f"  [NEW] {c['score']:5.1f} | {c['car']} | {c['price']}")
 
     # 6. Format & send
-    msg = format_message(eligible, total_scraped)
+    msg = format_message(eligible, total_scraped, already_seen)
     print(f"\nMessage length: {len(msg)} chars")
     send_long_message(msg)
     print("Report sent to Telegram ✅")
