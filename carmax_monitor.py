@@ -157,7 +157,7 @@ def send_long_message(text: str):
 
 def calc_finance(price: int, down: int) -> int:
     principal = price - down
-    if principal <=�
+    if principal <= 0:
         return 0
     r = FINANCE_APR / 100 / 12
     return round(principal * r * (1 + r)**FINANCE_TERM / ((1 + r)**FINANCE_TERM - 1))
@@ -256,7 +256,7 @@ def get_greeting() -> str:
     hour = datetime.now(PDT).hour
     if 5 <= hour < 12:
         return (
-            "\U0001f305 Доброе утро, Виталий и Светлана!\n"
+            "\U0001f305 Ќоброе утро, Виталий и Светлана!\n"
             "Пусть это утро принесёт вам отличные находки! \U0001f340"
         )
     elif 12 <= hour < 18:
@@ -271,8 +271,8 @@ def get_greeting() -> str:
         )
     else:
         return (
-            "\U0001f319 Доброй ночи, Виталий и Светлана!\n"
-            "Пусть завтра найдётся идеальное авто! ✨"
+            "\U0001f319 Ќоброй ночи, Виталий и Светлана!\n"
+            "Пусть завтра найдётся идеальное авто!  "
         )
 
 
@@ -334,7 +334,7 @@ def format_message(eligible: list, total_scraped: int) -> str:
 
     lines += [
         sep,
-        f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K миль",
+        f"Фильтры: {MIN_YEAR}-2023 · до ${MAX_PRICE:,} · до {MAX_MILES}K милы",
     ]
     return "\n".join(lines)
 
